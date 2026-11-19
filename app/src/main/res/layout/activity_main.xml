@@ -1,0 +1,92 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#0B0D10"
+    android:padding="28dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="20dp">
+
+        <TextView
+            android:id="@+id/btn_settings"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Ayarlar"
+            android:textColor="#E5E7EB"
+            android:textSize="14sp"
+            android:paddingLeft="14dp"
+            android:paddingRight="14dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:layout_marginRight="10dp"
+            android:focusable="true"
+            android:clickable="true"
+            android:background="@drawable/btn_selector" />
+
+        <TextView
+            android:id="@+id/btn_wifi"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Wi-Fi"
+            android:textColor="#E5E7EB"
+            android:textSize="14sp"
+            android:paddingLeft="14dp"
+            android:paddingRight="14dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:layout_marginRight="10dp"
+            android:focusable="true"
+            android:clickable="true"
+            android:background="@drawable/btn_selector" />
+
+        <TextView
+            android:id="@+id/btn_hidden"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Gizliler"
+            android:textColor="#9CA3AF"
+            android:textSize="14sp"
+            android:paddingLeft="14dp"
+            android:paddingRight="14dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:focusable="true"
+            android:clickable="true"
+            android:background="@drawable/btn_selector" />
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+        <TextView
+            android:id="@+id/ram_info"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#6B7280"
+            android:textSize="13sp"
+            android:layout_marginRight="18dp" />
+
+        <TextClock
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:format24Hour="HH:mm"
+            android:textColor="#F3F4F6"
+            android:textSize="26sp" />
+    </LinearLayout>
+
+    <GridView
+        android:id="@+id/app_grid"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:numColumns="5"
+        android:horizontalSpacing="16dp"
+        android:verticalSpacing="16dp"
+        android:listSelector="@drawable/focus_selector"
+        android:drawSelectorOnTop="true" />
+</LinearLayout>
