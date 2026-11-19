@@ -17,8 +17,14 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Decode Keystore
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+      - name: Prepare JKS Keystore
+        run: |
+          echo "${{ secrets.SIGNING_PEM_B64 }}" | base64 -d > combined.pem
+          openssl pkcs12 -export -in combined.pem -inkey combined.pem -out temp.p12 -name minimal -passout pass:minimaltv123
+          keytool -importkeystore \
+            -srckeystore temp.p12 -srcstoretype PKCS12 -srcstorepass minimaltv123 \
+            -destkeystore release.keystore -deststoretype JKS -deststorepass minimaltv123 \
+            -noprompt
 
       - name: Build Signed Release APK
         run: |
