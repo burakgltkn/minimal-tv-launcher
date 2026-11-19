@@ -22,8 +22,7 @@ jobs:
 
       - name: Build Signed Release APK
         run: |
-          chmod +x gradlew
-          ./gradlew assembleRelease \
+          gradle assembleRelease \
             -Pandroid.injected.signing.store.file=$PWD/release.keystore \
             -Pandroid.injected.signing.store.password=minimaltv123 \
             -Pandroid.injected.signing.key.alias=minimal \
