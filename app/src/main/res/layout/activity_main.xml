@@ -150,4 +150,37 @@
         android:alpha="0.0"
         android:clickable="false"
         android:focusable="false" />
+
+    <FrameLayout
+        android:id="@+id/screensaver_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000"
+        android:visibility="gone"
+        android:clickable="false"
+        android:focusable="false">
+
+        <LinearLayout
+            android:id="@+id/screensaver_clock_box"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <TextClock
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:format24Hour="HH:mm"
+                android:textColor="#D1D5DB"
+                android:textSize="76sp" />
+
+            <TextClock
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:format24Hour="dd MMMM EEEE"
+                android:textColor="#6B7280"
+                android:textSize="20sp" />
+        </LinearLayout>
+    </FrameLayout>
 </FrameLayout>

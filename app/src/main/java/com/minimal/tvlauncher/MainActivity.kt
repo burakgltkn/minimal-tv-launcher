@@ -16,6 +16,8 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.KeyEvent
@@ -28,7 +30,10 @@ import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import java.net.Inet4Address
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.net.Socket
+import kotlin.random.Random
 
 data class AppItem(
     val label: String,
@@ -44,6 +49,8 @@ class MainActivity : Activity() {
     private lateinit var prefs: SharedPreferences
     private lateinit var rootLayout: View
     private lateinit var dimOverlay: View
+    private lateinit var screensaverOverlay: View
+    private lateinit var screensaverClockBox: View
     private lateinit var grid: GridView
     private lateinit var ramText: TextView
     private lateinit var netText: TextView
@@ -54,8 +61,20 @@ class MainActivity : Activity() {
     private var showHidden = false
     private var dimLevel = 0
     private var isBlackScreen = false
+    private var isScreensaverActive = false
     private var lastKeyCode = -1
     private var lastKeyTime = 0L
+
+    private val handler = Handler(Looper.getMainLooper())
+    private val idleRunnable = Runnable { showScreensaver(true) }
+    private val shiftRunnable = object : Runnable {
+        override fun run() {
+            if (!isScreensaverActive) return
+            screensaverClockBox.translationX = Random.nextInt(-140, 141).toFloat()
+            screensaverClockBox.translationY = Random.nextInt(-90, 91).toFloat()
+            handler.postDelayed(this, 60_000L)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,6 +83,8 @@ class MainActivity : Activity() {
         prefs = getSharedPreferences("launcher_prefs", MODE_PRIVATE)
         rootLayout = findViewById(R.id.root_layout)
         dimOverlay = findViewById(R.id.dim_overlay)
+        screensaverOverlay = findViewById(R.id.screensaver_overlay)
+        screensaverClockBox = findViewById(R.id.screensaver_clock_box)
         grid = findViewById(R.id.app_grid)
         ramText = findViewById(R.id.ram_info)
         netText = findViewById(R.id.net_info)
@@ -80,17 +101,8 @@ class MainActivity : Activity() {
         adapter = AppAdapter()
         grid.adapter = adapter
 
-        grid.setOnItemClickListener { _, _, position, _ ->
-            val pkg = apps[position].packageName
-            val launch = packageManager.getLeanbackLaunchIntentForPackage(pkg)
-                ?: packageManager.getLaunchIntentForPackage(pkg)
-            if (launch != null) openIntent(launch)
-        }
-
-        grid.setOnItemLongClickListener { _, _, position, _ ->
-            showAppOptions(apps[position])
-            true
-        }
+        grid.setOnItemClickListener { _, _, position, _ -> launchPackage(apps[position].packageName) }
+        grid.setOnItemLongClickListener { _, _, position, _ -> showAppOptions(apps[position]); true }
 
         applyAppearance()
         applyBrightness()
@@ -102,37 +114,98 @@ class MainActivity : Activity() {
         super.onResume()
         updateRamInfo()
         updateNetworkInfo()
+        resetIdleTimer()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        handler.removeCallbacks(idleRunnable)
+        handler.removeCallbacks(shiftRunnable)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (isScreensaverActive) {
+            if (event.action == KeyEvent.ACTION_DOWN) showScreensaver(false)
+            return true
+        }
         if (isBlackScreen) {
             if (event.action == KeyEvent.ACTION_DOWN) toggleBlackScreen(false)
             return true
         }
 
-        val debounceMs = prefs.getInt("debounce_ms", 140)
-        if (debounceMs > 0 && event.action == KeyEvent.ACTION_DOWN) {
-            val now = SystemClock.uptimeMillis()
-            if (event.repeatCount == 0) {
-                if (event.keyCode == lastKeyCode && (now - lastKeyTime) < debounceMs) return true
-            } else {
-                if ((now - lastKeyTime) < 200L) return true
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            resetIdleTimer()
+            if (event.repeatCount == 0 && handleColorKey(event.keyCode)) return true
+
+            val debounceMs = prefs.getInt("debounce_ms", 140)
+            if (debounceMs > 0) {
+                val now = SystemClock.uptimeMillis()
+                if (event.repeatCount == 0) {
+                    if (event.keyCode == lastKeyCode && (now - lastKeyTime) < debounceMs) return true
+                } else if ((now - lastKeyTime) < 200L) {
+                    return true
+                }
+                lastKeyCode = event.keyCode
+                lastKeyTime = now
             }
-            lastKeyCode = event.keyCode
-            lastKeyTime = now
         }
         return super.dispatchKeyEvent(event)
     }
 
+    private fun handleColorKey(keyCode: Int): Boolean {
+        val prefKey = when (keyCode) {
+            KeyEvent.KEYCODE_PROG_RED -> "color_red"
+            KeyEvent.KEYCODE_PROG_GREEN -> "color_green"
+            KeyEvent.KEYCODE_PROG_YELLOW -> "color_yellow"
+            KeyEvent.KEYCODE_PROG_BLUE -> "color_blue"
+            else -> return false
+        }
+        val assignedPkg = prefs.getString(prefKey, null)
+        if (!assignedPkg.isNullOrEmpty()) {
+            launchPackage(assignedPkg)
+            return true
+        }
+        when (keyCode) {
+            KeyEvent.KEYCODE_PROG_RED -> showHdmiMenu()
+            KeyEvent.KEYCODE_PROG_GREEN -> cleanRam()
+            KeyEvent.KEYCODE_PROG_YELLOW -> cycleBrightness()
+            KeyEvent.KEYCODE_PROG_BLUE -> showScreensaver(true)
+        }
+        return true
+    }
+
+    private fun resetIdleTimer() {
+        handler.removeCallbacks(idleRunnable)
+        val mins = prefs.getInt("screensaver_min", 5)
+        if (mins > 0 && !isBlackScreen && !isScreensaverActive) {
+            handler.postDelayed(idleRunnable, mins * 60_000L)
+        }
+    }
+
+    private fun showScreensaver(enable: Boolean) {
+        isScreensaverActive = enable
+        handler.removeCallbacks(shiftRunnable)
+        if (enable) {
+            screensaverOverlay.visibility = View.VISIBLE
+            screensaverClockBox.translationX = 0f
+            screensaverClockBox.translationY = 0f
+            handler.postDelayed(shiftRunnable, 60_000L)
+        } else {
+            screensaverOverlay.visibility = View.GONE
+            resetIdleTimer()
+        }
+    }
+
     override fun onBackPressed() {
-        if (isBlackScreen) {
-            toggleBlackScreen(false)
-            return
-        }
-        if (showHidden) {
-            showHidden = false
-            loadApps()
-        }
+        if (isScreensaverActive) { showScreensaver(false); return }
+        if (isBlackScreen) { toggleBlackScreen(false); return }
+        if (showHidden) { showHidden = false; loadApps() }
+    }
+
+    private fun launchPackage(pkg: String) {
+        val launch = packageManager.getLeanbackLaunchIntentForPackage(pkg)
+            ?: packageManager.getLaunchIntentForPackage(pkg)
+        if (launch != null) openIntent(launch)
     }
 
     private fun cycleBrightness() {
@@ -152,7 +225,13 @@ class MainActivity : Activity() {
 
     private fun toggleBlackScreen(enable: Boolean) {
         isBlackScreen = enable
-        if (enable) dimOverlay.alpha = 1.0f else applyBrightness()
+        if (enable) {
+            handler.removeCallbacks(idleRunnable)
+            dimOverlay.alpha = 1.0f
+        } else {
+            applyBrightness()
+            resetIdleTimer()
+        }
     }
 
     private fun updateNetworkInfo() {
@@ -165,7 +244,7 @@ class MainActivity : Activity() {
             else -> "Ağ"
         }
         val ip = getLocalIpAddress()
-        netText.text = if (ip != null && type != "Çevrimdışı") "$type$ip" else type
+        netText.text = if (ip != null && type != "Çevrimdışı") "$type  $ip" else type
     }
 
     private fun getLocalIpAddress(): String? {
@@ -179,6 +258,42 @@ class MainActivity : Activity() {
             }
         } catch (_: Exception) {}
         return null
+    }
+
+    private fun runPingTest() {
+        Toast.makeText(this, "Ağ test ediliyor...", Toast.LENGTH_SHORT).show()
+        Thread {
+            val localIp = getLocalIpAddress() ?: "Yok"
+            val gateway = if (localIp.contains(".")) localIp.substringBeforeLast(".") + ".1" else "192.168.1.1"
+            val gwPing = measureTcpOrPing(gateway, 80)
+            val cfPing = measureTcpOrPing("1.1.1.1", 53)
+            val googlePing = measureTcpOrPing("8.8.8.8", 53)
+            val report = "TV IP: $localIp\n" +
+                "Modem ($gateway): $gwPing\n" +
+                "Cloudflare (1.1.1.1): $cfPing\n" +
+                "Google (8.8.8.8): $googlePing"
+            runOnUiThread {
+                AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setTitle("Ağ / Ping Testi")
+                    .setMessage(report)
+                    .setPositiveButton("Tamam", null)
+                    .show()
+            }
+        }.start()
+    }
+
+    private fun measureTcpOrPing(host: String, port: Int): String {
+        return try {
+            val start = SystemClock.elapsedRealtime()
+            Socket().use { it.connect(InetSocketAddress(host, port), 2000) }
+            "${SystemClock.elapsedRealtime() - start} ms"
+        } catch (_: Exception) {
+            try {
+                val start = SystemClock.elapsedRealtime()
+                val proc = Runtime.getRuntime().exec(arrayOf("/system/bin/ping", "-c", "1", "-W", "2", host))
+                if (proc.waitFor() == 0) "${SystemClock.elapsedRealtime() - start} ms" else "Erişilemiyor"
+            } catch (_: Exception) { "Erişilemiyor" }
+        }
     }
 
     private fun getFreeRamMb(): Pair<Long, Long> {
@@ -217,11 +332,13 @@ class MainActivity : Activity() {
     private fun showToolsMenu() {
         val hiddenLabel = if (showHidden) "Gizli Uygulamaları Sakla" else "Gizli Uygulamaları Göster"
         val options = arrayOf(
-            "Görünüm & Kumanda Filtresi",
+            "Görünüm, Ekran Koruyucu & Kumanda",
+            "Renkli Tuş Kısayolları",
+            "Ağ / Ping Testi",
+            "Saatli Ekran Koruyucuyu Başlat",
             "Önbellek / Depolama Ayarları",
             "Geliştirici Seçenekleri",
             "Sistem Ayarları",
-            "Wi-Fi Ayarları",
             hiddenLabel
         )
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
@@ -229,12 +346,40 @@ class MainActivity : Activity() {
             .setItems(options) { _, which ->
                 when (which) {
                     0 -> showThemeMenu()
-                    1 -> openIntent(Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS), Intent(Settings.ACTION_APPLICATION_SETTINGS))
-                    2 -> openIntent(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS), Intent(Settings.ACTION_SETTINGS))
-                    3 -> openIntent(Intent(Settings.ACTION_SETTINGS))
-                    4 -> openIntent(Intent(Settings.ACTION_WIFI_SETTINGS), Intent(Settings.ACTION_SETTINGS))
-                    5 -> { showHidden = !showHidden; loadApps() }
+                    1 -> showColorKeyMenu()
+                    2 -> runPingTest()
+                    3 -> showScreensaver(true)
+                    4 -> openIntent(Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS), Intent(Settings.ACTION_APPLICATION_SETTINGS))
+                    5 -> openIntent(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS), Intent(Settings.ACTION_SETTINGS))
+                    6 -> openIntent(Intent(Settings.ACTION_SETTINGS))
+                    7 -> { showHidden = !showHidden; loadApps() }
                 }
+            }.show()
+    }
+
+    private fun showColorKeyMenu() {
+        val keys = arrayOf("color_red", "color_green", "color_yellow", "color_blue")
+        val names = arrayOf("Kırmızı Tuş", "Yeşil Tuş", "Sarı Tuş", "Mavi Tuş")
+        val defaults = arrayOf("Varsayılan (HDMI)", "Varsayılan (RAM)", "Varsayılan (Parlaklık)", "Varsayılan (Saat)")
+        val items = Array(4) { i ->
+            val pkg = prefs.getString(keys[i], null)
+            val label = apps.firstOrNull { it.packageName == pkg }?.label ?: defaults[i]
+            "${names[i]}: $label"
+        }
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Renkli Tuş Kısayolları")
+            .setItems(items) { _, i -> pickAppForColorKey(keys[i], names[i]) }
+            .show()
+    }
+
+    private fun pickAppForColorKey(prefKey: String, title: String) {
+        val labels = mutableListOf("Varsayılana Sıfırla")
+        labels.addAll(apps.map { it.label })
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("$title Seç")
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which == 0) prefs.edit().remove(prefKey).apply()
+                else prefs.edit().putString(prefKey, apps[which - 1].packageName).apply()
             }.show()
     }
 
@@ -256,9 +401,11 @@ class MainActivity : Activity() {
     private fun showThemeMenu() {
         val simpleIcon = prefs.getBoolean("simple_icon", false)
         val debounceMs = prefs.getInt("debounce_ms", 140)
+        val ssMin = prefs.getInt("screensaver_min", 5)
         val options = arrayOf(
             "Sütun Sayısı (${prefs.getInt("cols", 5)})",
             "Sade İkon Modu: ${if (simpleIcon) "Açık (Az RAM)" else "Kapalı (Banner)"}",
+            "Ekran Koruyucu Süresi: ${if (ssMin == 0) "Kapalı" else "$ssMin dk"}",
             "Kumanda Filtresi: ${if (debounceMs == 0) "Kapalı" else "${debounceMs} ms"}",
             "Arka Plan Rengi",
             "Seçim Çerçevesi Rengi"
@@ -269,11 +416,20 @@ class MainActivity : Activity() {
                 when (which) {
                     0 -> pickColumns()
                     1 -> { prefs.edit().putBoolean("simple_icon", !simpleIcon).apply(); loadApps() }
-                    2 -> pickDebounce()
-                    3 -> pickBgColor()
-                    4 -> pickAccentColor()
+                    2 -> pickScreensaverTime()
+                    3 -> pickDebounce()
+                    4 -> pickBgColor()
+                    5 -> pickAccentColor()
                 }
             }.show()
+    }
+
+    private fun pickScreensaverTime() {
+        val labels = arrayOf("Kapalı", "2 Dakika", "5 Dakika", "10 Dakika")
+        val vals = intArrayOf(0, 2, 5, 10)
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Ekran Koruyucu Süresi")
+            .setItems(labels) { _, w -> prefs.edit().putInt("screensaver_min", vals[w]).apply(); resetIdleTimer() }.show()
     }
 
     private fun pickDebounce() {
