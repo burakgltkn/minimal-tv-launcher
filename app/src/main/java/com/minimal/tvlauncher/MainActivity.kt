@@ -3,9 +3,15 @@ package com.minimal.tvlauncher
 import android.app.Activity
 import android.app.ActivityManager
 import android.app.AlertDialog
+import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.Color
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
+import android.media.tv.TvContract
+import android.media.tv.TvInputManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -16,6 +22,7 @@ import android.widget.BaseAdapter
 import android.widget.GridView
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.Toast
 
 data class AppItem(
     val label: String,
@@ -29,6 +36,7 @@ data class AppItem(
 class MainActivity : Activity() {
 
     private lateinit var prefs: SharedPreferences
+    private lateinit var rootLayout: View
     private lateinit var grid: GridView
     private lateinit var ramText: TextView
     private lateinit var btnHidden: TextView
@@ -42,15 +50,16 @@ class MainActivity : Activity() {
         setContentView(R.layout.activity_main)
 
         prefs = getSharedPreferences("launcher_prefs", MODE_PRIVATE)
+        rootLayout = findViewById(R.id.root_layout)
         grid = findViewById(R.id.app_grid)
         ramText = findViewById(R.id.ram_info)
         btnHidden = findViewById(R.id.btn_hidden)
 
+        findViewById<TextView>(R.id.btn_hdmi).setOnClickListener { showHdmiMenu() }
+        findViewById<TextView>(R.id.btn_ram_clean).setOnClickListener { cleanRam() }
+        findViewById<TextView>(R.id.btn_theme).setOnClickListener { showThemeMenu() }
         findViewById<TextView>(R.id.btn_settings).setOnClickListener {
             openIntent(Intent(Settings.ACTION_SETTINGS))
-        }
-        findViewById<TextView>(R.id.btn_wifi).setOnClickListener {
-            openIntent(Intent(Settings.ACTION_WIFI_SETTINGS), Intent(Settings.ACTION_SETTINGS))
         }
         btnHidden.setOnClickListener {
             showHidden = !showHidden
@@ -73,6 +82,7 @@ class MainActivity : Activity() {
             true
         }
 
+        applyAppearance()
         loadApps()
         grid.requestFocus()
     }
@@ -90,13 +100,142 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun updateRamInfo() {
+    private fun getFreeRamMb(): Pair<Long, Long> {
         val am = getSystemService(ACTIVITY_SERVICE) as ActivityManager
         val mi = ActivityManager.MemoryInfo()
         am.getMemoryInfo(mi)
-        val freeMb = mi.availMem / (1024 * 1024)
-        val totalMb = mi.totalMem / (1024 * 1024)
+        return Pair(mi.availMem / (1024 * 1024), mi.totalMem / (1024 * 1024))
+    }
+
+    private fun updateRamInfo() {
+        val (freeMb, totalMb) = getFreeRamMb()
         ramText.text = "RAM: $freeMb / $totalMb MB"
+    }
+
+    private fun cleanRam() {
+        val beforeFree = getFreeRamMb().first
+        val am = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+        val pm = packageManager
+
+        for (appInfo in pm.getInstalledApplications(0)) {
+            val pkg = appInfo.packageName
+            if (pkg != packageName && !pkg.startsWith("com.android.systemui")) {
+                try {
+                    am.killBackgroundProcesses(pkg)
+                } catch (_: Exception) {}
+            }
+        }
+        System.gc()
+
+        ramText.postDelayed({
+            val (afterFree, totalMb) = getFreeRamMb()
+            ramText.text = "RAM: $afterFree / $totalMb MB"
+            val diff = afterFree - beforeFree
+            val msg = if (diff > 0) "RAM temizlendi (+${diff} MB)" else "RAM güncel ($afterFree MB boş)"
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        }, 350)
+    }
+
+    private fun showHdmiMenu() {
+        val tvManager = getSystemService(Context.TV_INPUT_SERVICE) as? TvInputManager
+        val inputs = tvManager?.tvInputList?.filter { it.isPassthroughInput } ?: emptyList()
+
+        if (inputs.isEmpty()) {
+            // Donanım listesi boş dönerse doğrudan Canlı TV / Kaynak ekranını aç
+            val fallback = Intent(Intent.ACTION_VIEW, TvContract.Channels.CONTENT_URI)
+            openIntent(fallback)
+            return
+        }
+
+        val labels = inputs.map { it.loadLabel(this).toString() }.toTypedArray()
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("HDMI / Giriş Seç")
+            .setItems(labels) { _, which ->
+                val uri = TvContract.buildChannelUriForPassthroughInput(inputs[which].id)
+                openIntent(Intent(Intent.ACTION_VIEW, uri))
+            }
+            .show()
+    }
+
+    private fun showThemeMenu() {
+        val options = arrayOf(
+            "Sütun Sayısı (Şu an: ${prefs.getInt("cols", 5)})",
+            "Arka Plan Rengi",
+            "Seçim Çerçevesi Rengi"
+        )
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Görünüm")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> pickColumns()
+                    1 -> pickBgColor()
+                    2 -> pickAccentColor()
+                }
+            }
+            .show()
+    }
+
+    private fun pickColumns() {
+        val cols = arrayOf("4 Sütun (Büyük)", "5 Sütun (Standart)", "6 Sütun (Kompakt)")
+        val vals = intArrayOf(4, 5, 6)
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Sütun Sayısı")
+            .setItems(cols) { _, w ->
+                prefs.edit().putInt("cols", vals[w]).apply()
+                applyAppearance()
+            }
+            .show()
+    }
+
+    private fun pickBgColor() {
+        val names = arrayOf("Saf Siyah (En Hafif)", "Koyu Gri", "Gece Mavisi", "Antrasit")
+        val hexes = arrayOf("#000000", "#0B0D10", "#09111F", "#141414")
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Arka Plan")
+            .setItems(names) { _, w ->
+                prefs.edit().putString("bg_color", hexes[w]).apply()
+                applyAppearance()
+            }
+            .show()
+    }
+
+    private fun pickAccentColor() {
+        val names = arrayOf("Mavi", "Yeşil", "Turuncu", "Beyaz")
+        val hexes = arrayOf("#3B82F6", "#10B981", "#F59E0B", "#F3F4F6")
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Seçim Çerçevesi")
+            .setItems(names) { _, w ->
+                prefs.edit().putString("accent_color", hexes[w]).apply()
+                applyAppearance()
+            }
+            .show()
+    }
+
+    private fun applyAppearance() {
+        val cols = prefs.getInt("cols", 5)
+        val bgHex = prefs.getString("bg_color", "#0B0D10") ?: "#0B0D10"
+        val accentHex = prefs.getString("accent_color", "#3B82F6") ?: "#3B82F6"
+
+        grid.numColumns = cols
+        rootLayout.setBackgroundColor(Color.parseColor(bgHex))
+        grid.selector = buildFocusSelector(Color.parseColor(accentHex))
+    }
+
+    private fun buildFocusSelector(accentColor: Int): StateListDrawable {
+        val focused = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setStroke(6, accentColor)
+            setColor(Color.argb(35, Color.red(accentColor), Color.green(accentColor), Color.blue(accentColor)))
+        }
+        val normal = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(Color.TRANSPARENT)
+        }
+        return StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_focused), focused)
+            addState(intArrayOf(android.R.attr.state_selected), focused)
+            addState(intArrayOf(), normal)
+        }
     }
 
     private fun openIntent(primary: Intent, fallback: Intent? = null) {
